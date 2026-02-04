@@ -89,14 +89,26 @@ app.get('/api/files', (req, res) => {
 });
 
 // 2. POST /api/upload - Upload a file with password
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', (req, res, next) => {
+    console.log("Upload request received");
+    upload.single('file')(req, res, (err) => {
+        if (err) {
+            console.error("Multer error:", err);
+            return res.status(400).json({ error: err.message });
+        }
+        next();
+    });
+}, async (req, res) => {
     const { password } = req.body;
+    console.log("Body password received:", !!password);
+    console.log("File received:", req.file ? req.file.originalname : "NONE");
 
     if (!req.file || !password) {
         return res.status(400).json({ error: 'File and password are required.' });
     }
 
     try {
+        console.log("Hashing password...");
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newFile = {
@@ -114,12 +126,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         db.push(newFile);
         writeDb(db);
 
+        console.log("File saved to DB. ID:", newFile.id);
         res.status(201).json({
             message: 'File uploaded and encrypted successfully.',
             fileId: newFile.id
         });
     } catch (err) {
-        console.error(err);
+        console.error("Upload process error:", err);
         res.status(500).json({ error: 'Server Error during upload.' });
     }
 });
@@ -156,6 +169,35 @@ app.post('/api/file/:id/download', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Internal validation error.' });
+    }
+});
+
+// 4. DELETE /api/file/:id - Remove file and metadata
+app.delete('/api/file/:id', async (req, res) => {
+    const { id } = req.params;
+    const db = readDb();
+    const fileIndex = db.findIndex(f => f.id === id);
+
+    if (fileIndex === -1) {
+        return res.status(404).json({ error: 'File not found.' });
+    }
+
+    const file = db[fileIndex];
+
+    try {
+        // Delete from disk
+        if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+        }
+
+        // Delete from DB
+        db.splice(fileIndex, 1);
+        writeDb(db);
+
+        res.json({ message: 'File deleted successfully.' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to delete file.' });
     }
 });
 
